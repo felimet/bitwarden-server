@@ -1,0 +1,226 @@
+# =============================================================================
+# Bitwarden 官方標準版 + Cloudflare Tunnel — Docker Compose 部署設定
+# =============================================================================
+# ⚠️ 硬體需求：最低 4 GB RAM、12 GB 磁碟空間、x64 處理器
+#    Synology DS224+（2 GB RAM）"無法"執行此方案，請改用根目錄的 Bitwarden Lite。
+#
+# 本 Compose 定義了以下服務：
+#   1. mssql        — Microsoft SQL Server 2022 Express（資料庫）
+#   2. web          — Web Vault 前端介面
+#   3. api          — 核心 REST API
+#   4. identity     — 身份驗證 / OAuth / 2FA
+#   5. admin        — 系統管理面板
+#   6. icons        — 網站圖示快取服務
+#   7. notifications — 即時推播通知（SignalR）
+#   8. events       — 事件紀錄處理器
+#   9. nginx        — 反向代理 / TLS 終止
+#  10. cloudflared  — Cloudflare Tunnel 連線代理
+#
+# 映像來源：GitHub Container Registry (GHCR) — ghcr.io/bitwarden/self-host
+# 官方文件：https://bitwarden.com/help/install-on-premise-linux/
+# 需要 Installation ID/Key：https://bitwarden.com/host/
+# =============================================================================
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # Microsoft SQL Server 2022 Express — 主要資料庫
+  # ---------------------------------------------------------------------------
+  mssql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: bitwarden-mssql
+    restart: always
+    platform: linux/amd64
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD}
+      MSSQL_PID: Express
+    volumes:
+      - mssql_data:/var/opt/mssql
+    networks:
+      - bw_net
+    # 不對外暴露 Port，僅供內部服務存取
+    # ports:
+    #   - "1433:1433"
+
+    # ---------------------------------------------------------------------------
+    # Web Vault — 前端使用者介面
+    # ---------------------------------------------------------------------------
+  web:
+    image: ghcr.io/bitwarden/self-host/web:${BW_VERSION:-latest}
+    container_name: bitwarden-web
+    restart: always
+    volumes:
+      - web_data:/app/Web
+    networks:
+      - bw_net
+
+  # ---------------------------------------------------------------------------
+  # API — 核心 REST API，處理密碼庫 CRUD 操作
+  # ---------------------------------------------------------------------------
+  api:
+    image: ghcr.io/bitwarden/self-host/api:${BW_VERSION:-latest}
+    container_name: bitwarden-api
+    restart: always
+    env_file:
+      - settings.env
+    volumes:
+      - core_data:/etc/bitwarden/core
+      - ca_certs:/etc/bitwarden/ca-certificates
+      - logs:/etc/bitwarden/logs
+    networks:
+      - bw_net
+    depends_on:
+      - mssql
+
+  # ---------------------------------------------------------------------------
+  # Identity — 身份驗證、OAuth 2.0、兩步驟驗證
+  # ---------------------------------------------------------------------------
+  identity:
+    image: ghcr.io/bitwarden/self-host/identity:${BW_VERSION:-latest}
+    container_name: bitwarden-identity
+    restart: always
+    env_file:
+      - settings.env
+    volumes:
+      - core_data:/etc/bitwarden/core
+      - ca_certs:/etc/bitwarden/ca-certificates
+      - logs:/etc/bitwarden/logs
+      - identity_data:/etc/bitwarden/identity
+    networks:
+      - bw_net
+    depends_on:
+      - mssql
+
+  # ---------------------------------------------------------------------------
+  # Admin — 系統管理面板（使用者管理、組織管理、系統設定）
+  # ---------------------------------------------------------------------------
+  admin:
+    image: ghcr.io/bitwarden/self-host/admin:${BW_VERSION:-latest}
+    container_name: bitwarden-admin
+    restart: always
+    env_file:
+      - settings.env
+    volumes:
+      - core_data:/etc/bitwarden/core
+      - ca_certs:/etc/bitwarden/ca-certificates
+      - logs:/etc/bitwarden/logs
+    networks:
+      - bw_net
+    depends_on:
+      - mssql
+
+  # ---------------------------------------------------------------------------
+  # Icons — 網站圖示快取服務
+  # ---------------------------------------------------------------------------
+  icons:
+    image: ghcr.io/bitwarden/self-host/icons:${BW_VERSION:-latest}
+    container_name: bitwarden-icons
+    restart: always
+    env_file:
+      - settings.env
+    volumes:
+      - ca_certs:/etc/bitwarden/ca-certificates
+      - logs:/etc/bitwarden/logs
+    networks:
+      - bw_net
+
+  # ---------------------------------------------------------------------------
+  # Notifications — 即時推播通知（SignalR Hub）
+  # ---------------------------------------------------------------------------
+  notifications:
+    image: ghcr.io/bitwarden/self-host/notifications:${BW_VERSION:-latest}
+    container_name: bitwarden-notifications
+    restart: always
+    env_file:
+      - settings.env
+    volumes:
+      - ca_certs:/etc/bitwarden/ca-certificates
+      - logs:/etc/bitwarden/logs
+    networks:
+      - bw_net
+    depends_on:
+      - mssql
+
+  # ---------------------------------------------------------------------------
+  # Events — 事件紀錄處理器（稽核日誌）
+  # ---------------------------------------------------------------------------
+  events:
+    image: ghcr.io/bitwarden/self-host/events:${BW_VERSION:-latest}
+    container_name: bitwarden-events
+    restart: always
+    env_file:
+      - settings.env
+    volumes:
+      - ca_certs:/etc/bitwarden/ca-certificates
+      - logs:/etc/bitwarden/logs
+    networks:
+      - bw_net
+    depends_on:
+      - mssql
+
+  # ---------------------------------------------------------------------------
+  # Nginx — 反向代理，整合所有微服務入口
+  # ---------------------------------------------------------------------------
+  # 內部將請求路由至 API、Identity、Admin、Web 等服務
+  # 不直接對外暴露 — 由 cloudflared 進行 Tunnel 反向代理
+  # ---------------------------------------------------------------------------
+  nginx:
+    image: ghcr.io/bitwarden/self-host/nginx:${BW_VERSION:-latest}
+    container_name: bitwarden-nginx
+    restart: always
+    volumes:
+      - nginx_data:/etc/bitwarden/nginx
+      - web_data:/app/Web
+      - logs:/etc/bitwarden/logs
+    networks:
+      - bw_net
+    depends_on:
+      - web
+      - api
+      - identity
+      - admin
+      - icons
+      - notifications
+      - events
+    # 安全考量：不直接暴露 Port，透過 cloudflared 隧道
+    # ports:
+    #   - "80:8080"
+    #   - "443:8443"
+
+    # ---------------------------------------------------------------------------
+    # Cloudflared — Cloudflare Tunnel 連線代理
+    # ---------------------------------------------------------------------------
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: cloudflared_bw
+    restart: unless-stopped
+    command: tunnel run
+    environment:
+      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
+    env_file:
+      - .env
+    networks:
+      - bw_net
+    depends_on:
+      - nginx
+
+# =============================================================================
+# 持久化儲存卷
+# =============================================================================
+volumes:
+  mssql_data: # SQL Server 資料庫檔案
+  web_data: # Web Vault 前端靜態檔案
+  core_data: # 共用核心設定（加密金鑰等）
+  identity_data: # Identity 服務資料
+  ca_certs: # CA 憑證
+  logs: # 各服務日誌
+  nginx_data:
+    # Nginx 設定
+
+    # =============================================================================
+    # 網路定義
+    # =============================================================================
+networks:
+  bw_net:
+    driver: bridge

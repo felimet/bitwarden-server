@@ -1,0 +1,74 @@
+# =============================================================================
+# Vaultwarden（社群版）+ Cloudflare Tunnel — Docker Compose 部署設定
+# =============================================================================
+# ⭐ 本專案預設推薦方案
+# 官方映像來源：
+#   - Docker Hub: vaultwarden/server
+#   - GHCR: ghcr.io/dani-garcia/vaultwarden
+# 官方文件：https://github.com/dani-garcia/vaultwarden/wiki
+# 參考設定來源：vaultwarden/.env.template（原始碼內建範本）
+#
+# 所有可調整的參數均統一由 .env 檔案載入，請先複製 .env.template 為 .env 再行修改。
+# 注意：部分設定若透過 Admin 面板修改，會儲存於 bw-data/config.json 並覆蓋 .env 值。
+# =============================================================================
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # Vaultwarden — 輕量級 Bitwarden 相容伺服器（Rust 實作）
+  # ---------------------------------------------------------------------------
+  # 功能涵蓋：個人保管庫、Send、附件、組織、群組、FIDO2 WebAuthn、
+  #          Yubikey、Duo、Emergency Access、SSO (OIDC)、Admin 面板
+  # ---------------------------------------------------------------------------
+  vaultwarden:
+    image: vaultwarden/server:latest
+    container_name: vaultwarden
+    restart: unless-stopped
+    env_file:
+      - .env                         # 從 .env 載入所有環境變數
+    volumes:
+      # 持久化掛載：SQLite 資料庫、RSA 金鑰、附件、圖示快取、Send 檔案
+      # 容器內部路徑固定為 /data
+      - ./bw-data:/data
+    # 安全考量：不直接對外暴露 Port，所有流量經由 cloudflared 反向代理
+    # 容器內部 Port 為 80（Docker 模式預設），獨立運行時為 8000
+    # ports:
+    #   - "127.0.0.1:8000:80"
+    networks:
+      - bw_net
+    # 健康檢查（參考 vaultwarden/docker/healthcheck.sh）
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:80/alive", "||", "exit", "1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # ---------------------------------------------------------------------------
+  # Cloudflared — Cloudflare Tunnel 連線代理
+  # ---------------------------------------------------------------------------
+  # 負責與 Cloudflare Edge Network 建立加密隧道，
+  # 將公網請求安全轉發至 vaultwarden 容器（HTTP port 80）。
+  # Cloudflare Tunnel Public Hostname 設定：
+  #   Type: HTTP | URL: vaultwarden:80
+  # ---------------------------------------------------------------------------
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: cloudflared_bw
+    restart: unless-stopped
+    command: tunnel run
+    environment:
+      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
+    networks:
+      - bw_net
+    depends_on:
+      vaultwarden:
+        condition: service_healthy
+
+# =============================================================================
+# 網路定義 — 所有服務共用同一橋接網路，確保容器間可透過 Service Name 互通
+# Cloudflare Tunnel 設定 Public Hostname 時使用 "vaultwarden:80"
+# =============================================================================
+networks:
+  bw_net:
+    driver: bridge

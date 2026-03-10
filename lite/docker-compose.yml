@@ -1,0 +1,61 @@
+# =============================================================================
+# Bitwarden Lite（官方）+ Cloudflare Tunnel — Docker Compose 部署設定
+# =============================================================================
+# 本 Compose 定義了兩項服務：
+#   1. bitwarden   — Bitwarden Lite（官方單一容器版，映像來源 GHCR）
+#   2. cloudflared — Cloudflare Tunnel 反向代理（零開放 Port 對外曝露）
+#
+# Bitwarden 設定參數由 settings.env 載入，Cloudflare Token 由 .env 載入。
+# =============================================================================
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # Bitwarden Lite — 官方輕量級單一容器部署
+  # ---------------------------------------------------------------------------
+  # 映像來源：GitHub Container Registry (GHCR)
+  # 官方文件：https://bitwarden.com/help/install-and-deploy-lite/
+  # 需要 Installation ID/Key：https://bitwarden.com/host/
+  # ---------------------------------------------------------------------------
+  bitwarden:
+    image: ghcr.io/bitwarden/lite
+    container_name: bitwarden
+    restart: always
+    env_file:
+      - settings.env                 # Bitwarden 專屬設定（Installation ID/Key、DB、SMTP 等）
+    volumes:
+      # 持久化掛載：資料庫、憑證、日誌等均存於此目錄
+      # 容器內部路徑固定為 /etc/bitwarden
+      - ./bw-data:/etc/bitwarden
+    # 安全考量：不直接對外暴露 Port，透過 cloudflared 反向代理
+    # Bitwarden Lite 內部 HTTP Port 為 8080，HTTPS 為 8443
+    # ports:
+    #   - "80:8080"
+    networks:
+      - bw_net
+
+  # ---------------------------------------------------------------------------
+  # Cloudflared — Cloudflare Tunnel 連線代理
+  # ---------------------------------------------------------------------------
+  # 負責與 Cloudflare Edge 建立加密隧道，將公網請求轉發至 bitwarden:8080
+  # ---------------------------------------------------------------------------
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: cloudflared_bw
+    restart: always
+    command: tunnel run
+    environment:
+      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
+    env_file:
+      - .env                         # 載入 Cloudflare Tunnel Token
+    networks:
+      - bw_net
+    depends_on:
+      - bitwarden
+
+# =============================================================================
+# 網路定義 — 服務間透過 Docker 橋接網路互通
+# =============================================================================
+networks:
+  bw_net:
+    driver: bridge

@@ -1,0 +1,28 @@
+# =============================================================================
+# Bitwarden 自建伺服器專案 .gitignore
+# =============================================================================
+
+# 環境變數設定檔（含 Tunnel Token 等機敏資訊）
+.env
+
+# Vaultwarden 持久化資料（SQLite 資料庫、附件等）
+bw-data/
+
+# 官方 Lite 版方案機敏檔案
+lite/.env
+lite/bw-data/
+
+# 官方標準版方案機敏檔案
+standard/.env
+standard/bw-data/
+
+# 官方原始碼參考（git clone 的大型儲存庫）
+server/
+vaultwarden/
+
+# macOS 系統檔案
+.DS_Store
+
+# ref repo 
+vaultwarden/
+official-server/
