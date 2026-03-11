@@ -87,15 +87,20 @@ mkdir -p bw-data
 
 3. **產生 Admin Token**（二選一）：
 
-   方法 A：Argon2 PHC（推薦，更安全）
+   方法 A：Argon2 PHC（推薦，直接在電腦終端機運行）
+   
    ```bash
-   docker run --rm vaultwarden/server /vaultwarden hash
+   docker run --rm -it vaultwarden/server /vaultwarden hash
    ```
+
+   範例：
+   ![admin_token](./images/admin_token.png)
    > ⚠️ 將產生的字串填入 `ADMIN_TOKEN` 時，需將所有 `$` 替換為 `$$`。
 
    方法 B：隨機字串
+   
    ```bash
-   openssl rand -base64 48
+   openssl rand -base64 128
    ```
 
    > ⚠️ `.env` 內含機敏資訊，已透過 `.gitignore` 排除於版控之外。
@@ -144,7 +149,11 @@ docker compose logs -f
    docker compose down && docker compose up -d
    ```
 
-4. **（選填）驗證 Admin 面板：** 前往 `https://vault.example.com/admin`，輸入 Admin Token 登入。
+4. **（選填）啟用登入速率防護（Rate Limiting）：**
+   若希望抵禦密碼暴力破解，可於 `.env` 取消註解 `LOGIN_RATELIMIT_*` 與 `ADMIN_RATELIMIT_*`。
+   > ☠️ **致命陷阱警告**：在 Cloudflare Tunnel 架構下，你**必須**同時配置 `IP_HEADER=X-Forwarded-For`。否則 Vaultwarden 只能看見內部 Docker IP 的請求，只要任何人觸發一次防護（例如連續輸錯 10 次），**全站所有使用者都會被封鎖**！
+
+5. **（選填）驗證 Admin 面板：** 前往 `https://vault.example.com/admin`，輸入 Admin Token 登入。
 
 ## 步驟七：選填 — 啟用行動裝置推撥通知
 
@@ -161,6 +170,38 @@ docker compose logs -f
    ```bash
    docker compose down && docker compose up -d
    ```
+
+## 步驟八：選填 — 配置 SMTP 發信服務 (以 Gmail 為例)
+
+配置 SMTP 後，Vaultwarden 才能夠寄送邀請信、新登入提示或 Email 2FA 驗證碼。若你使用個人的 Gmail 信箱：
+
+1. **取得 Google 應用程式密碼：**
+   - 前往 [Google 帳戶安全性](https://myaccount.google.com/security)，確認已開啟「兩步驟驗證」。
+   - 搜尋並點選「應用程式密碼 (App Passwords)」。
+   - 建立並取得一組 **16 碼** 的隨機密碼。
+
+2. **編輯 `.env` 中的 SMTP 設定：**
+   取消註解並填入以下內容：
+   ```env
+   SMTP_HOST=smtp.gmail.com
+   SMTP_FROM=your_email@gmail.com
+   SMTP_FROM_NAME=Vaultwarden
+   SMTP_PORT=587
+   SMTP_SECURITY=starttls
+   SMTP_USERNAME=your_email@gmail.com
+   # ⚠️ 請填寫剛剛獲得的 16 碼應用程式密碼，不可使用原本的 Google 密碼
+   SMTP_PASSWORD=xxxx xxxx xxxx xxxx
+   ```
+
+3. **重啟容器使其生效：**
+   ```bash
+   docker compose down && docker compose up -d
+   ```
+
+> ⚠️ **Google SMTP 限制與權衡：**
+> 
+> 1. **寄件者覆寫**：無論 `SMTP_FROM` 填寫什麼，Google 皆會強制替換成你實際發信的 `your_email@gmail.com`。若極度在意企業/品牌形象，建議改用 SendGrid、Resend 或 Mailgun 等專業第三方 API 發信服務。
+> 2. **發信額度與封鎖風險**：免費版 Gmail 每天發信上限極低（約 500 封）。若遭惡意機器人大量觸發發信要求（例如狂洗密碼重置或邀請），可能導致你的 Google 帳號因大量異常發信而被判定為垃圾郵件帳號。**請務必確保前面的防暴破機率設定（Rate Limiting）與 Cloudflare WAF 皆已啟動防禦。**
 
 ## Cloudflare Tunnel 注意事項
 

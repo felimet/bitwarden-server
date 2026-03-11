@@ -6,30 +6,32 @@
 
 ## 部署架構
 
+本專案採用安全可靠的網路通訊架構，確保伺服器無需開放實體連接埠給外部網路。透過 Cloudflare Tunnel 建立反向的安全隧道，所有流量皆經過嚴格的加密與存取過濾。
+
 ```mermaid
-graph TD
-    subgraph "公網 Internet"
-        A["🖥️ 各平台 Bitwarden 客戶端<br/>(瀏覽器 / 桌面 / 行動裝置 / CLI)"]
-        B(("☁️ Cloudflare Edge Network<br/>WAF · DDoS 防護 · SSL 終止"))
+flowchart LR
+    A["各平台客戶端<br/>(網頁 / 桌面 / APP)"] -- "HTTPS 請求" --> B
+    
+    B(("**網際網路 Internet**<br/><br/>Cloudflare Edge<br/>WAF | DDoS 防護 | SSL 終止"))
+
+    subgraph Local ["NAS / 伺服器主機內部 (Docker 虛擬網路)"]
+        direction LR
+        C["Cloudflared 容器<br/>(Tunnel Connector)"]
+        D["Bitwarden 容器<br/>(Vaultwarden 等)"]
+        E[("資料庫 / 持久化目錄<br/>bw-data/")]
+        
+        C -- "HTTP 反向代理" --> D
+        D -- "讀寫" --> E
     end
 
-    subgraph "NAS / 伺服器主機（Docker Network: bw_net）"
-        C["🔒 cloudflared 容器<br/>(Tunnel Connector)"]
-        D["🗄️ Bitwarden 容器<br/>(Vaultwarden / Lite / Standard)"]
-        E[("💾 SQLite 資料庫<br/>bw-data/")]
-    end
+    B -- "安全加密隧道<br/>(Cloudflare Tunnel)" --> C
 
-    A -- "HTTPS 請求" --> B
-    B -- "加密隧道<br/>Cloudflare Tunnel" --> C
-    C -- "HTTP 反向代理" --> D
-    D -- "讀寫" --> E
+    classDef edge fill:#fbf0e6,stroke:#ebb781,stroke-width:2px,color:#594430
+    classDef local fill:#e6effb,stroke:#86aadb,stroke-width:2px,color:#32445c
+    classDef client fill:#eaf4e9,stroke:#93c28f,stroke-width:2px,color:#355232
+    classDef db fill:#f5f5f5,stroke:#bbbbbb,stroke-width:2px,color:#4d4d4d
 
-    classDef cloudflare fill:#F38020,stroke:#333,stroke-width:2px,color:#fff
-    classDef local fill:#175DDC,stroke:#333,stroke-width:2px,color:#fff
-    classDef client fill:#4CAF50,stroke:#333,stroke-width:2px,color:#fff
-    classDef db fill:#6C757D,stroke:#333,stroke-width:2px,color:#fff
-
-    class B cloudflare
+    class B edge
     class C,D local
     class A client
     class E db
@@ -40,35 +42,33 @@ graph TD
 Bitwarden 採用**零知識架構（Zero-Knowledge Architecture）**——所有加解密作業完全在客戶端完成，伺服器端永遠不會接觸明文密碼。即使伺服器遭入侵，攻擊者取得的僅為無法解密的密文。
 
 ```mermaid
-graph TB
-    subgraph "客戶端（完全在本地執行）"
-        U["使用者輸入明文密碼"]
-        KDF["金鑰衍生<br/>PBKDF2-SHA256 (600K 次迭代)<br/>或 Argon2id"]
-        MK["Master Key"]
-        SK["Symmetric Key<br/>(AES-256-CBC)"]
-        ENC["🔐 加密<br/>明文 → 密文"]
-        DEC["🔓 解密<br/>密文 → 明文"]
-        HASH["雜湊處理<br/>Master Password Hash<br/>(僅用於認證)"]
-    end
+sequenceDiagram
+    autonumber
+    actor User as 使用者
+    participant Client as 客戶端設備 (本地端)
+    participant Server as 伺服器端 (遠端)
 
-    subgraph "伺服器端（僅儲存密文）"
-        API["API 接收層"]
-        DB[("💾 資料庫<br/>• 加密後密碼庫<br/>• 加密後對稱金鑰<br/>• 雜湊過的認證資料<br/><br/>❌ 無明文密碼<br/>❌ 無 Master Key")]
-    end
+    Note over User,Server: 金鑰衍生與登入認證
+    User->>Client: 輸入明文主密碼
+    Note over Client: KDF (PBKDF2/Argon2id)
+    Client->>Client: 衍生主金鑰 (MK) 
+    Client->>Client: 產生認證雜湊值
+    Client->>Server: 傳送認證雜湊值 (TLS)
+    Server-->>Client: 驗證通過，回傳加密對稱金鑰 (SK)
+    Client->>Client: 使用 MK 解密取得 SK
 
-    U --> KDF --> MK --> SK
-    SK --> ENC
-    MK --> HASH
-    ENC -- "傳送密文 (TLS)" --> API --> DB
-    DB -- "回傳密文 (TLS)" --> DEC
-    SK --> DEC
-    HASH -- "傳送雜湊 (TLS)" --> API
+    Note over User,Server: 資料加密與同步 (寫入)
+    User->>Client: 新增/修改密碼項目
+    Client->>Client: 以 SK 進行 AES-256 加密
+    Client->>Server: 傳送密文存檔 (TLS)
+    Note right of Server: 伺服器僅儲存密文
+    Server-->>Client: 同步成功
 
-    classDef client fill:#4CAF50,stroke:#333,stroke-width:1px,color:#fff
-    classDef server fill:#175DDC,stroke:#333,stroke-width:1px,color:#fff
-
-    class U,KDF,MK,SK,ENC,DEC,HASH client
-    class API,DB server
+    Note over User,Server: 資料讀取與解密 (讀取)
+    Client->>Server: 請求讀取資料
+    Server-->>Client: 回傳密文資料
+    Client->>Client: 以 SK 解密為明文
+    Client-->>User: 呈現明文密碼
 ```
 
 > 由於伺服器端不涉及解密，無論選擇哪套方案，密碼庫的加密安全性**完全相同**。
@@ -140,3 +140,7 @@ bitwarden-server/
 |:----:|------|------|
 | 3 | **[安全注意事項](docs/precautions.md)** | 關閉公開註冊、Admin 面板、備份策略 |
 | 4 | **[客戶端設定](docs/client-setup.md)** | 跨平台 Bitwarden 客戶端連線至自建伺服器 |
+
+## Vaultwarden Server Console 介面
+
+![vaultwarden Server Console](./docs/images/console.png)

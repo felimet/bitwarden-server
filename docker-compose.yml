@@ -36,9 +36,9 @@ services:
     #   - "127.0.0.1:8000:80"
     networks:
       - bw_net
-    # 健康檢查（參考 vaultwarden/docker/healthcheck.sh）
+    # 健康檢查
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:80/alive", "||", "exit", "1"]
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:80/alive"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -56,9 +56,7 @@ services:
     image: cloudflare/cloudflared:latest
     container_name: cloudflared_bw
     restart: unless-stopped
-    command: tunnel run
-    environment:
-      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
     networks:
       - bw_net
     depends_on:
