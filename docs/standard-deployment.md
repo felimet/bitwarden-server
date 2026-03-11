@@ -7,8 +7,9 @@
 ## 架構圖
 
 ```mermaid
-graph TD
-    subgraph "Docker Compose（standard/ 目錄）"
+%%{init: {"flowchart": {"nodeSpacing": 15, "rankSpacing": 30}}}%%
+graph LR
+    subgraph "Docker Compose"
         NGINX["🌐 Nginx<br/>反向代理"]
         WEB["🖥️ Web Vault<br/>前端介面"]
         API["⚙️ API<br/>核心 REST API"]
@@ -18,7 +19,7 @@ graph TD
         NOTIF["📬 Notifications<br/>推播通知"]
         EVENTS["📋 Events<br/>事件紀錄"]
         MSSQL[("💾 SQL Server<br/>2022 Express")]
-        CF["🔒 cloudflared<br/>Tunnel"]
+        CF["🔒 Cloudflared<br/>Tunnel"]
     end
 
     CLIENT["☁️ Cloudflare Edge"] --> CF

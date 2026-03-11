@@ -8,11 +8,10 @@
 |----------|------|
 | CPU | Intel Celeron J4125 四核心（2.0 GHz，Burst 2.7 GHz） |
 | 架構 | x86_64 (amd64) |
-| 預設記憶體 | 2 GB DDR4（焊死） |
+| 預設記憶體 | 2 GB DDR4 |
 | 最大記憶體 | 6 GB（加裝一條 4 GB DDR4 SO-DIMM） |
 | 儲存 | 2-Bay（3.5" / 2.5" SATA HDD/SSD） |
 | 網路 | 2 × 1GbE RJ-45（支援 Link Aggregation） |
-| 功耗 | ~15W |
 
 ---
 
@@ -29,6 +28,9 @@ graph LR
     subgraph "方案 C — Vaultwarden"
         C1["單一容器<br/>vaultwarden/server<br/>+ SQLite"]
     end
+
+    A1 ~~~ B1
+    B1 ~~~ C1
 
     classDef heavy fill:#dc3545,stroke:#333,color:#fff
     classDef medium fill:#F38020,stroke:#333,color:#fff
@@ -84,40 +86,30 @@ graph LR
 ### Bitwarden 加密與資料流向
 
 ```mermaid
-graph TB
-    subgraph "客戶端（瀏覽器 / App / 桌面版）"
-        U["使用者輸入明文密碼"]
-        KDF["PBKDF2 / Argon2<br/>Master Password → Master Key"]
-        EK["衍生加密金鑰<br/>(Stretched Master Key)"]
-        ENC["AES-256-CBC 加密<br/>明文 → 密文"]
-        DEC["AES-256-CBC 解密<br/>密文 → 明文"]
-    end
+sequenceDiagram
+    autonumber
+    actor User as 使用者
+    participant Client as 客戶端<br/>(App / 瀏覽器)
+    participant TLS as 網路傳輸層<br/>(HTTPS)
+    participant Server as 伺服器端<br/>(API / 資料庫)
 
-    subgraph "網路傳輸層"
-        TLS["HTTPS / TLS 1.3 加密通道"]
-    end
-
-    subgraph "伺服器端（Vaultwarden / Bitwarden Lite）"
-        API["API 接收層"]
-        DB[("資料庫<br/>僅儲存密文 + 加密後金鑰")]
-    end
-
-    U --> KDF --> EK
-    EK --> ENC
-    ENC -->|"傳送密文"| TLS
-    TLS --> API --> DB
-    DB -->|"回傳密文"| TLS
-    TLS -->|"接收密文"| DEC
-    EK --> DEC
-    DEC --> U
-
-    classDef client fill:#4CAF50,stroke:#333,stroke-width:1px,color:#fff
-    classDef network fill:#F38020,stroke:#333,stroke-width:1px,color:#fff
-    classDef server fill:#175DDC,stroke:#333,stroke-width:1px,color:#fff
-
-    class U,KDF,EK,ENC,DEC client
-    class TLS network
-    class API,DB server
+    User->>Client: 輸入 Master Password (僅存本地)
+    Note over Client: 透過 PBKDF2 / Argon2 衍生出<br/>Master Key 與 Stretched Master Key
+    
+    User->>Client: 輸入或操作明文密碼紀錄
+    Client->>Client: 使用 AES-256-CBC 與 Master Key<br/>將明文加密成「密文」
+    
+    Client->>TLS: 發送同步/儲存請求 (僅傳送密文與雜湊)
+    TLS->>Server: 透過 TLS 1.3 加密通道安全傳輸
+    
+    Note over Server: 零知識架構 (Zero-Knowledge) <br/>伺服器端永遠接觸不到，也無法還原<br/>明文與 Master Key
+    Server->>Server: 將接收到的密文寫入儲存空間
+    
+    Server-->>TLS: 日後同步時，回傳資料庫中的密文
+    TLS-->>Client: 透過加密通道安全接收
+    
+    Client->>Client: 利用本地記憶體中的 Master Key 解密
+    Client-->>User: 在介面上還原並展示明文
 ```
 
 ### 核心安全原則
